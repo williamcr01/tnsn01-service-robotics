@@ -1,3 +1,5 @@
+// Motor test code
+
 // ===== Motor pins =====
 int motor2pin1 = 11;  // PWM forward
 int motor2pin2 = 10;  // PWM reverse
