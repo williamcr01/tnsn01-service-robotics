@@ -1,7 +1,7 @@
 int motor2pin1 = 10;
-int motor2pin2 = 9;
+int motor2pin2 = 11;
 
-int motor1pin1 = 5;
+int motor1pin1 = 9;
 int motor1pin2 = 6;
 
 int lSpeed = 0;
