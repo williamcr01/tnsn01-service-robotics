@@ -1,4 +1,5 @@
 #include <QTRSensors.h>
+#include <Servo.h>
 
 //-------------------- Button Settings --------------------
 int button_pin = 0;
@@ -18,6 +19,17 @@ int right_speed = 0;
 int base_speed = 80;
 int turn_speed = 40;
 int turn_delay = 850;
+
+//-------------------- Servo Settings --------------------
+Servo servo1;
+Servo servo2;
+
+const int SERVO1_PIN = 7;
+const int SERVO2_PIN = 8;
+
+// Set starting angles
+int servo_start1 = 40;
+int servo_start2 = 60;
 
 //-------------------- QTR sensor settings --------------------
 QTRSensors qtr;
@@ -45,6 +57,14 @@ void setup() {
   // Motor setup
   pinMode(motor1pin1, OUTPUT);
   pinMode(motor1pin2, OUTPUT);
+
+  // Servo setup
+  servo1.attach(SERVO1_PIN);
+  servo2.attach(SERVO2_PIN);
+
+  // Move both to their original positions
+  servo1.write(start1);
+  servo2.write(start2);
 
   // QTR sensor setup
   qtr.setTypeAnalog();
@@ -107,6 +127,29 @@ void loop() {
   } else {
     runMotors(0, 0);
   }
+}
+
+void performPickUp() {
+  // 1) Servo 1: +90°
+  servo1.write(start1 + 50);
+  delay(2000);
+
+  // 2) Servo 2: +30°
+  servo2.write(start2 + 30);
+  delay(2000);
+
+  // 3) Servo 1: -90° (back to start)
+  servo1.write(start1);
+  delay(3000);
+
+  // 4) Servo 2: -60°
+  servo2.write(start2 - 50);
+  delay(2000);
+
+  // 5) Return both to original position
+  servo1.write(start1);
+  servo2.write(start2);
+  delay(2000);
 }
 
 void performLeftTurn() {
