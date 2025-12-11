@@ -41,7 +41,7 @@ int turnThreshold = 1;
 int leftEdgeCount = 0;
 int rightEdgeCount = 0;
 
-//-------------------- PID settings --------------------
+//-------------------- Control settings --------------------
 double K_p = 0.06;
 double K_i = 0.0;
 double K_d = 0.01;
@@ -54,6 +54,77 @@ unsigned long last_loop_time = 0;
 const unsigned long loop_interval = 25;
 
 double T_s = loop_interval / 1000.0;  // 25 ms
+
+//-------------------- Maze settings --------------------
+
+struct Neighbor {
+  uint8_t x;
+  uint8_t y;
+};
+struct Node {
+  uint8_t x;
+  uint8_t y;
+  uint8_t degree;
+  Neighbor neighbors[4];
+};
+static const uint8_t MAZE_WIDTH = 7;
+static const uint8_t MAZE_HEIGHT = 7;
+static const uint8_t NODE_COUNT = 49;
+static const int8_t START[2] = { 3, 6 };
+
+static const Node MAZE_GRAPH[NODE_COUNT] = {
+  { 0, 0, 2, { { 0, 1 }, { 1, 0 }, { 255, 255 }, { 255, 255 } } },
+  { 0, 1, 2, { { 0, 0 }, { 0, 2 }, { 255, 255 }, { 255, 255 } } },  // Island
+  { 0, 2, 2, { { 0, 1 }, { 0, 3 }, { 255, 255 }, { 255, 255 } } },
+  { 0, 3, 2, { { 0, 2 }, { 0, 4 }, { 255, 255 }, { 255, 255 } } },
+  { 0, 4, 2, { { 0, 3 }, { 0, 5 }, { 255, 255 }, { 255, 255 } } },
+  { 0, 5, 2, { { 0, 4 }, { 1, 5 }, { 255, 255 }, { 255, 255 } } },
+  { 0, 6, 1, { { 1, 6 }, { 255, 255 }, { 255, 255 }, { 255, 255 } } },
+  { 1, 0, 2, { { 0, 0 }, { 1, 1 }, { 255, 255 }, { 255, 255 } } },
+  { 1, 1, 2, { { 1, 0 }, { 2, 1 }, { 255, 255 }, { 255, 255 } } },
+  { 1, 2, 2, { { 1, 3 }, { 2, 2 }, { 255, 255 }, { 255, 255 } } },
+  { 1, 3, 2, { { 1, 2 }, { 1, 4 }, { 255, 255 }, { 255, 255 } } },
+  { 1, 4, 2, { { 1, 3 }, { 1, 5 }, { 255, 255 }, { 255, 255 } } },
+  { 1, 5, 4, { { 0, 5 }, { 1, 4 }, { 1, 6 }, { 2, 5 } } },  // intersection deg=4
+  { 1, 6, 2, { { 0, 6 }, { 1, 5 }, { 255, 255 }, { 255, 255 } } },
+  { 2, 0, 2, { { 2, 1 }, { 3, 0 }, { 255, 255 }, { 255, 255 } } },
+  { 2, 1, 2, { { 1, 1 }, { 2, 0 }, { 255, 255 }, { 255, 255 } } },
+  { 2, 2, 2, { { 1, 2 }, { 2, 3 }, { 255, 255 }, { 255, 255 } } },
+  { 2, 3, 2, { { 2, 2 }, { 3, 3 }, { 255, 255 }, { 255, 255 } } },
+  { 2, 4, 1, { { 3, 4 }, { 255, 255 }, { 255, 255 }, { 255, 255 } } },
+  { 2, 5, 3, { { 1, 5 }, { 2, 6 }, { 3, 5 }, { 255, 255 } } },  // intersection deg=3
+  { 2, 6, 2, { { 2, 5 }, { 3, 6 }, { 255, 255 }, { 255, 255 } } },
+  { 3, 0, 3, { { 2, 0 }, { 3, 1 }, { 4, 0 }, { 255, 255 } } },  // intersection deg=3
+  { 3, 1, 2, { { 3, 0 }, { 3, 2 }, { 255, 255 }, { 255, 255 } } },
+  { 3, 2, 2, { { 3, 1 }, { 4, 2 }, { 255, 255 }, { 255, 255 } } },
+  { 3, 3, 2, { { 2, 3 }, { 4, 3 }, { 255, 255 }, { 255, 255 } } },
+  { 3, 4, 3, { { 2, 4 }, { 3, 5 }, { 4, 4 }, { 255, 255 } } },  // intersection deg=3
+  { 3, 5, 2, { { 2, 5 }, { 3, 4 }, { 255, 255 }, { 255, 255 } } },
+  { 3, 6, 1, { { 2, 6 }, { 255, 255 }, { 255, 255 }, { 255, 255 } } },  // Starting node
+  { 4, 0, 1, { { 3, 0 }, { 255, 255 }, { 255, 255 }, { 255, 255 } } },
+  { 4, 1, 2, { { 4, 2 }, { 5, 1 }, { 255, 255 }, { 255, 255 } } },
+  { 4, 2, 3, { { 3, 2 }, { 4, 1 }, { 4, 3 }, { 255, 255 } } },  // intersection deg=3 // Island
+  { 4, 3, 3, { { 3, 3 }, { 4, 2 }, { 4, 4 }, { 255, 255 } } },  // intersection deg=3
+  { 4, 4, 3, { { 3, 4 }, { 4, 3 }, { 5, 4 }, { 255, 255 } } },  // intersection deg=3
+  { 4, 5, 2, { { 4, 6 }, { 5, 5 }, { 255, 255 }, { 255, 255 } } },
+  { 4, 6, 2, { { 4, 5 }, { 5, 6 }, { 255, 255 }, { 255, 255 } } },
+  { 5, 0, 1, { { 6, 0 }, { 255, 255 }, { 255, 255 }, { 255, 255 } } },
+  { 5, 1, 2, { { 4, 1 }, { 6, 1 }, { 255, 255 }, { 255, 255 } } },
+  { 5, 2, 2, { { 5, 3 }, { 6, 2 }, { 255, 255 }, { 255, 255 } } },
+  { 5, 3, 2, { { 5, 2 }, { 6, 3 }, { 255, 255 }, { 255, 255 } } },
+  { 5, 4, 2, { { 4, 4 }, { 5, 5 }, { 255, 255 }, { 255, 255 } } },
+  { 5, 5, 2, { { 4, 5 }, { 5, 4 }, { 255, 255 }, { 255, 255 } } },
+  { 5, 6, 2, { { 4, 6 }, { 6, 6 }, { 255, 255 }, { 255, 255 } } },
+  { 6, 0, 2, { { 5, 0 }, { 6, 1 }, { 255, 255 }, { 255, 255 } } },
+  { 6, 1, 2, { { 5, 1 }, { 6, 0 }, { 255, 255 }, { 255, 255 } } },
+  { 6, 2, 1, { { 5, 2 }, { 255, 255 }, { 255, 255 }, { 255, 255 } } },
+  { 6, 3, 2, { { 5, 3 }, { 6, 4 }, { 255, 255 }, { 255, 255 } } },
+  { 6, 4, 2, { { 6, 3 }, { 6, 5 }, { 255, 255 }, { 255, 255 } } },
+  { 6, 5, 2, { { 6, 4 }, { 6, 6 }, { 255, 255 }, { 255, 255 } } },
+  { 6, 6, 2, { { 5, 6 }, { 6, 5 }, { 255, 255 }, { 255, 255 } } },
+};
+
+// Neighbor entries with {255, 255} are unused (padding to fixed 4 slots).
 
 void setup() {
   //Serial
@@ -175,8 +246,10 @@ void loop() {
       } else {
         rightEdgeCount = 0;
       }
-
-      if (leftEdgeCount >= turnThreshold) {
+      if (leftEdgeCount >= turnThreshold && rightEdgeCount >= turnThreshold) {
+        // Intersection
+        start = false;
+      } else if (leftEdgeCount >= turnThreshold) {
         performLeftTurn();
         leftEdgeCount = 0;
         rightEdgeCount = 0;
@@ -277,25 +350,32 @@ void performLeftTurn() {
   runMotors(0, 0);
   delay(50);
 
+  runMotors(50, 50);
+  delay(100);
+
   // Start turning
   runMotors(turn_speed, -turn_speed);
 
   // First, turn until we lose the line on the center sensors
   // (we need to clear the current line before looking for the new one)
   unsigned long startTime = millis();
-  while (millis() - startTime < 500) {  // Turn for at least 300ms to clear current line
-    qtr.readCalibrated(sensorValues);
-    delay(25);
-  }
+  // while (millis() - startTime < 400) {  // Turn for at least 300ms to clear current line
+  //   qtr.readCalibrated(sensorValues);
+  //   delay(25);
+  // }
 
   // Now keep turning until center sensors find the line again
   bool lineFound = false;
   startTime = millis();
-  while (!lineFound && (millis() - startTime < 4000)) {  // Timeout after 2 seconds
+  while (!lineFound && (millis() - startTime < 3000)) {  // Timeout after 2 seconds
     qtr.readCalibrated(sensorValues);
 
     // Check if any of the center sensors see the line
-    if (sensorValues[2] > 800 || sensorValues[3] > 800) {
+    // if (sensorValues[2] > 800 || sensorValues[3] > 800) {
+    //   lineFound = true;
+    // }
+    int pos = calculateLinePosition();
+    if (pos - 1500 > -50 && pos - 1500 < 50) {
       lineFound = true;
     }
     delay(25);
@@ -317,23 +397,30 @@ void performRightTurn() {
   runMotors(0, 0);
   delay(50);
 
+  runMotors(50, 50);
+  delay(100);
+
   // Start turning
   runMotors(-turn_speed, turn_speed);
 
   // First, turn until we clear the current line
   unsigned long startTime = millis();
-  while (millis() - startTime < 500) {
-    qtr.readCalibrated(sensorValues);
-    delay(25);
-  }
+  // while (millis() - startTime < 400) {
+  //   qtr.readCalibrated(sensorValues);
+  //   delay(25);
+  // }
 
   // Now keep turning until center sensors find the line again
   bool lineFound = false;
   startTime = millis();
-  while (!lineFound && (millis() - startTime < 4000)) {
+  while (!lineFound && (millis() - startTime < 3000)) {
     qtr.readCalibrated(sensorValues);
 
-    if (sensorValues[2] > 800 || sensorValues[3] > 800) {
+    // if (sensorValues[2] > 800 || sensorValues[3] > 800) {
+    //   lineFound = true;
+    // }
+    int pos = calculateLinePosition();
+    if (pos - 1500 > -50 && pos - 1500 < 50) {
       lineFound = true;
     }
     delay(25);

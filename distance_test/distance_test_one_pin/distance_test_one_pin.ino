@@ -1,6 +1,6 @@
 #include <NewPing.h>
 
-#define SONAR_PIN 12
+#define SONAR_PIN 1
 #define MAX_DISTANCE 200
 
 NewPing sonar(SONAR_PIN, SONAR_PIN, MAX_DISTANCE);

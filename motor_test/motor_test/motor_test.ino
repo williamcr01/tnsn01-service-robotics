@@ -8,7 +8,7 @@ int motor1pin1 = 9;   // PWM forward
 int motor1pin2 = 6;   // PWM reverse
 
 // Set speed between -100 and 100
-int motorSpeed = 0;  // change this value to set speed
+int motorSpeed = 50;  // change this value to set speed
 
 // ===== Encoder pins =====
 // Motor 1 (external interrupt on A)
