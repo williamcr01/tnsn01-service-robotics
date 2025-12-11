@@ -17,10 +17,10 @@ bool start = false;
 bool last_button_state = HIGH;
 
 //-------------------- Motor Settings --------------------
-int motor2pin1 = 10;
+int motor2pin1 = 5;
 int motor2pin2 = 11;
 
-int motor1pin1 = 9;
+int motor1pin1 = 3;
 int motor1pin2 = 6;
 
 int left_speed = 0;
@@ -214,11 +214,6 @@ void loop() {
         Serial.println(" cm");
       }
 
-      if (distance_cm < 10 && distance_cm != 0) {
-        //start = false;
-        //turnAround();
-      }
-
       uint16_t pos = calculateLinePosition();
       error = pos - 1500.0;  // 1000 if three sensors, 2000 if five sensors
       //Serial.println(error);
@@ -270,6 +265,13 @@ void loop() {
       //   //left turn
       //   performLeftTurn();
       // }
+
+      if (distance_cm < 15 && distance_cm != 0) {
+        //start = false;
+        //turnAround();
+        left_speed -= 30;
+        right_speed -= 30;
+      }
 
       if (digitalRead(pressure_button) == LOW) {
         performPickup();
@@ -336,6 +338,8 @@ double calculateLinePosition() {
 }
 
 void performPickup() {
+  runMotors(0, 0);
+  delay(400);
   // ---- 1) Servo 1: slow move +80° ----
   int startPos = servo_start1;
   int endPos = servo_start1 + 80;
@@ -345,24 +349,24 @@ void performPickup() {
     delay(10);  // slow movement
   }
 
-  delay(2000);
+  delay(1000);
 
   // ---- 2) Servo 2: +30° ----
   servo2.write(servo_start2 + 30);
-  delay(2000);
+  delay(1000);
 
   // ---- 3) Servo 1: fast return ----
   servo1.write(servo_start1);
-  delay(3000);
+  delay(1000);
 
   // ---- 4) Servo 2: -80° ----
   servo2.write(servo_start2 - 80);
-  delay(2000);
+  delay(1000);
 
   // ---- 5) Return both ----
   servo1.write(servo_start1);
   servo2.write(servo_start2);
-  delay(2000);
+  delay(1000);
 }
 
 // void performLeftTurn() {
