@@ -52,6 +52,7 @@ uint16_t sensorValues[SensorCount];
 int turnThreshold = 1;
 int leftEdgeCount = 0;
 int rightEdgeCount = 0;
+int black_line = 500;
 
 //-------------------- Control settings --------------------
 double K_p = 0.1;
@@ -138,8 +139,17 @@ static const Node MAZE_GRAPH[NODE_COUNT] = {
 
 // Neighbor entries with {255, 255} are unused (padding to fixed 4 slots).
 
+//-------------------- State --------------------
 // flag for first loop timing
 bool first;
+
+int picked_up = 0;
+
+bool is_intersection = false;
+bool is_island = false;
+//char dirs[] = { 'S', 'S', 'R', 'L' };
+char dirs[] = { 'R', 'R', 'S', 'S', 'L', 'L' };
+int curr_cmd = 0;
 
 void setup() {
   // Sonar
@@ -209,9 +219,9 @@ void loop() {
         Serial.println("Out of range");
       } else {
         distance_cm = uS / 58.0;  // floating point
-        Serial.print("Distance: ");
-        Serial.print(distance_cm, 2);  // print with 2 decimals
-        Serial.println(" cm");
+        // Serial.print("Distance: ");
+        // Serial.print(distance_cm, 2);  // print with 2 decimals
+        // Serial.println(" cm");
       }
 
       uint16_t pos = calculateLinePosition();
@@ -271,6 +281,9 @@ void loop() {
         //turnAround();
         left_speed -= 30;
         right_speed -= 30;
+        if (sensorValues[2] < black_line && sensorValues[3] < black_line) {
+          turnAround();
+        }
       }
 
       if (digitalRead(pressure_button) == LOW) {
@@ -283,23 +296,25 @@ void loop() {
         delay(200);  // Small debounce delay
       }
 
-      if (sensorValues[0] > 850 && sensorValues[1] > 850) {
+      qtr.readCalibrated(sensorValues);
+
+      if (sensorValues[0] > black_line) {
         leftEdgeCount++;
-        // Serial.print("Left detected: ");
-        // Serial.println(leftEdgeCount);
+        Serial.println("Left edge");
       } else {
         leftEdgeCount = 0;
       }
-      if (sensorValues[5] > 850 && sensorValues[4] > 850) {
+      if (sensorValues[5] > black_line) {
         rightEdgeCount++;
-        // Serial.print("Right detected: ");
-        // Serial.println(rightEdgeCount);
+        Serial.println("Right edge");
       } else {
         rightEdgeCount = 0;
       }
+
       if (leftEdgeCount >= turnThreshold && rightEdgeCount >= turnThreshold) {
         // Intersection
-        start = false;
+        //start = false;
+        is_intersection = true;
       } else if (leftEdgeCount >= turnThreshold) {
         performLeftTurn();
         leftEdgeCount = 0;
@@ -309,10 +324,40 @@ void loop() {
         leftEdgeCount = 0;
         rightEdgeCount = 0;
       }
-      // Serial.print("left_speed: ");
-      // Serial.println(left_speed);
-      // Serial.print("right_speed: ");
-      // Serial.println(right_speed);
+      if (is_intersection || is_island) {
+        Serial.println("Intersection");
+        char cmd = dirs[curr_cmd];
+        if (is_island) { cmd = 'I'; }
+
+        switch (cmd) {
+          case 'L':
+            Serial.println("Intersection Left");
+            performLeftTurnIntersect();
+            break;
+          case 'R':
+            Serial.println("Intersection Right");
+            performRightTurnIntersect();
+            break;
+          case 'S':
+            Serial.println("Intersection Straight");
+            // Drive straight through intersection
+            runMotors(base_speed - 20, base_speed - 20);
+            delay(400);  // Clear the intersection lines
+            break;
+          case 'I':
+            // BLIND DRIVE for Island
+            runMotors(60, 60);
+            delay(600);  // Time it takes to cross the gap
+            // Then wait for line re-acquisition
+            //while (totalSensorSum < 200) { qtr.readCalibrated(sensorValues); }
+            break;
+        }
+        curr_cmd++;
+        is_intersection = false;
+        is_island = false;
+        // start = false;
+      }
+
       runMotors(left_speed, right_speed);
 
       //delay(T_s * 1000); // not consistent, doesnt keep code execution time in mind
@@ -349,7 +394,7 @@ void performPickup() {
     delay(10);  // slow movement
   }
 
-  delay(1000);
+  delay(2000);
 
   // ---- 2) Servo 2: +30° ----
   servo2.write(servo_start2 + 30);
@@ -357,16 +402,16 @@ void performPickup() {
 
   // ---- 3) Servo 1: fast return ----
   servo1.write(servo_start1);
-  delay(1000);
+  delay(2000);
 
   // ---- 4) Servo 2: -80° ----
   servo2.write(servo_start2 - 80);
-  delay(1000);
+  delay(3000);
 
   // ---- 5) Return both ----
   servo1.write(servo_start1);
   servo2.write(servo_start2);
-  delay(1000);
+  delay(2000);
 }
 
 // void performLeftTurn() {
@@ -422,7 +467,7 @@ void turnAround() {
     qtr.readCalibrated(sensorValues);
 
     // Check if any of the center sensors see the line
-    if (sensorValues[2] > 800 || sensorValues[3] > 800) {
+    if (sensorValues[2] > black_line || sensorValues[3] > black_line) {
       middleCount++;
     }
     if (middleCount >= 3) {
@@ -443,8 +488,139 @@ void performLeftTurn() {
   runMotors(0, 0);
   delay(50);
 
-  runMotors(50, 50);
-  delay(200);
+  runMotors(40, 40);
+  delay(300);
+  qtr.readCalibrated(sensorValues);
+  if (sensorValues[2] > black_line || sensorValues[3] > black_line) {
+    runMotors(0, 0);
+    delay(400);
+    is_intersection = true;
+    leftEdgeCount = 0;
+    rightEdgeCount = 0;
+    runMotors(-40, -40);
+    delay(300);
+    return;
+  }
+
+
+  // Start turning
+  runMotors(turn_speed, -turn_speed);
+
+  // First, turn until we lose the line on the center sensors
+  // (we need to clear the current line before looking for the new one)
+  unsigned long startTime = millis();
+  while (millis() - startTime < 300) {  // Turn for at least 300ms to clear current line
+    qtr.readCalibrated(sensorValues);
+    delay(25);
+  }
+
+  // Now keep turning until center sensors find the line again
+  bool lineFound = false;
+  int middleCount = 0;
+  startTime = millis();
+  while (!lineFound && (millis() - startTime < 3000)) {  // Timeout after 2 seconds
+    qtr.readCalibrated(sensorValues);
+
+    // Check if any of the center sensors see the line
+    if (sensorValues[2] > black_line || sensorValues[3] > black_line) {
+      middleCount++;
+    }
+    if (middleCount >= 3) {
+      lineFound = true;
+    }
+    delay(25);
+  }
+
+  // Stop
+  runMotors(0, 0);
+  delay(50);
+
+  if (!lineFound) {
+    Serial.println("Warning: line not found after turn!");
+  }
+}
+
+void performRightTurn() {
+  Serial.println("Turn right");
+
+  // Stop briefly
+  runMotors(0, 0);
+  delay(50);
+
+  runMotors(40, 40);
+  delay(300);
+  qtr.readCalibrated(sensorValues);
+  if (sensorValues[2] > black_line || sensorValues[3] > black_line) {
+    runMotors(0, 0);
+    delay(400);
+    is_intersection = true;
+    leftEdgeCount = 0;
+    rightEdgeCount = 0;
+    runMotors(-40, -40);
+    delay(300);
+    return;
+  }
+
+  // Start turning
+  runMotors(-turn_speed, turn_speed);
+
+  // First, turn until we clear the current line
+  unsigned long startTime = millis();
+  while (millis() - startTime < 300) {
+    qtr.readCalibrated(sensorValues);
+    delay(25);
+  }
+
+  // Now keep turning until center sensors find the line again
+  bool lineFound = false;
+  int middleCount = 0;
+  startTime = millis();
+  while (!lineFound && (millis() - startTime < 3000)) {
+    qtr.readCalibrated(sensorValues);
+
+    if (sensorValues[2] > black_line || sensorValues[3] > black_line) {
+      middleCount++;
+    }
+    if (middleCount >= 3) {
+      lineFound = true;
+    }
+    // int pos = calculateLinePosition();
+    // if (pos - 1500 > -100 && pos - 1500 < 100) {
+    //   lineFound = true;
+    // }
+    delay(25);
+  }
+
+  // Stop
+  runMotors(0, 0);
+  delay(50);
+
+  if (!lineFound) {
+    Serial.println("Warning: line not found after turn!");
+  }
+}
+
+void performLeftTurnIntersect() {
+  Serial.println("Turn left after intersect");
+
+  // Stop briefly
+  runMotors(0, 0);
+  delay(50);
+
+  runMotors(40, 40);
+  delay(300);
+  // qtr.readCalibrated(sensorValues);
+  // if (sensorValues[2] > 750 || sensorValues[3] > 750) {
+  //   runMotors(0, 0);
+  //   delay(400);
+  //   is_intersection = true;
+  //   leftEdgeCount = 0;
+  //   rightEdgeCount = 0;
+  //   runMotors(-40, -40);
+  //   delay(300);
+  //   return;
+  // }
+
 
   // Start turning
   runMotors(turn_speed, -turn_speed);
@@ -483,15 +659,26 @@ void performLeftTurn() {
   }
 }
 
-void performRightTurn() {
-  Serial.println("Turn right");
+void performRightTurnIntersect() {
+  Serial.println("Turn right after intersetct");
 
   // Stop briefly
   runMotors(0, 0);
   delay(50);
 
-  runMotors(50, 50);
-  delay(200);
+  runMotors(40, 40);
+  delay(300);
+  // qtr.readCalibrated(sensorValues);
+  // if (sensorValues[2] > 750 || sensorValues[3] > 750) {
+  //   runMotors(0, 0);
+  //   delay(400);
+  //   is_intersection = true;
+  //   leftEdgeCount = 0;
+  //   rightEdgeCount = 0;
+  //   runMotors(-40, -40);
+  //   delay(300);
+  //   return;
+  // }
 
   // Start turning
   runMotors(-turn_speed, turn_speed);
