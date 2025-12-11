@@ -17,9 +17,9 @@ void loop() {
   if (uS == 0) {
     Serial.println("Out of range");
   } else {
-    float distance_cm = uS / 58.0;   // floating point
+    float distance_cm = uS / 58.0;  // floating point
     Serial.print("Distance: ");
-    Serial.print(distance_cm, 2);    // print with 2 decimals
+    Serial.print(distance_cm, 2);  // print with 2 decimals
     Serial.println(" cm");
   }
 }

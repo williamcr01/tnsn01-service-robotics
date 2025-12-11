@@ -1,5 +1,15 @@
 #include <QTRSensors.h>
 #include <Servo.h>
+#include <NewPing.h>
+
+//-------------------- Sonar Settings --------------------
+int sonar_pin = 1;
+int max_dis = 200;
+
+NewPing sonar(sonar_pin, sonar_pin, max_dis);
+
+unsigned int uS;
+float distance_cm;
 
 //-------------------- Button Settings --------------------
 int button_pin = 0;
@@ -16,7 +26,7 @@ int motor1pin2 = 6;
 int left_speed = 0;
 int right_speed = 0;
 
-int base_speed = 60;
+int base_speed = 65;
 int turn_speed = 40;
 int turn_delay = 900;
 
@@ -28,8 +38,10 @@ const int SERVO1_PIN = 7;
 const int SERVO2_PIN = 8;
 
 // Set starting angles
-int servo_start1 = 40;
-int servo_start2 = 75;
+int servo_start1 = 35;
+int servo_start2 = 120;
+
+int pressure_button = 12;
 
 //-------------------- QTR sensor settings --------------------
 QTRSensors qtr;
@@ -42,9 +54,9 @@ int leftEdgeCount = 0;
 int rightEdgeCount = 0;
 
 //-------------------- Control settings --------------------
-double K_p = 0.06;
+double K_p = 0.1;
 double K_i = 0.0;
-double K_d = 0.01;
+double K_d = 0.005;
 double last_error = 0;
 double integrator = 0;
 double integrator_max = 1000;
@@ -126,7 +138,13 @@ static const Node MAZE_GRAPH[NODE_COUNT] = {
 
 // Neighbor entries with {255, 255} are unused (padding to fixed 4 slots).
 
+// flag for first loop timing
+bool first;
+
 void setup() {
+  // Sonar
+  // None needed
+
   //Serial
   Serial.begin(9600);
 
@@ -140,12 +158,14 @@ void setup() {
   pinMode(motor2pin2, OUTPUT);
 
   // Servo setup
-  //servo1.attach(SERVO1_PIN);
-  //servo2.attach(SERVO2_PIN);
+  servo1.attach(SERVO1_PIN);
+  servo2.attach(SERVO2_PIN);
+
+  pinMode(pressure_button, INPUT_PULLUP);
 
   // Move both to their original positions
-  //servo1.write(servo_start1);
-  //servo2.write(servo_start2);
+  servo1.write(servo_start1);
+  servo2.write(servo_start2);
 
   // QTR sensor setup
   qtr.setTypeAnalog();
@@ -169,16 +189,35 @@ void setup() {
   //   delay(2000);
   //   runMotors(0, 0);
   //   Serial.println("Test done");
+
+  first = true;
 }
 
 void loop() {
   //Serial.println(start);
   if (start == true) {
     unsigned long now = millis();
-    if (now - last_loop_time >= loop_interval) {  // keep loop timing consistent
+    if ((now - last_loop_time >= loop_interval) || first == true) {  // keep loop timing consistent
+      first == false;
       last_loop_time = now;
       //Serial.println("In motor");
       qtr.readCalibrated(sensorValues);
+
+      uS = sonar.ping();
+
+      if (uS == 0) {
+        Serial.println("Out of range");
+      } else {
+        distance_cm = uS / 58.0;  // floating point
+        Serial.print("Distance: ");
+        Serial.print(distance_cm, 2);  // print with 2 decimals
+        Serial.println(" cm");
+      }
+
+      if (distance_cm < 10 && distance_cm != 0) {
+        //start = false;
+        //turnAround();
+      }
 
       uint16_t pos = calculateLinePosition();
       error = pos - 1500.0;  // 1000 if three sensors, 2000 if five sensors
@@ -188,16 +227,16 @@ void loop() {
       double motor_speed = K_p * error + K_i * integrator + K_d * (error - last_error) / T_s;
       last_error = error;
 
-      Serial.print("Sensors: ");
-      for (int i = 0; i < SensorCount; i++) {
-        Serial.print(sensorValues[i]);
-        Serial.print(" ");
-      }
-      Serial.println();
-      Serial.print("Position: ");
-      Serial.println(pos);
-      Serial.print("Error: ");
-      Serial.println(error);
+      // Serial.print("Sensors: ");
+      // for (int i = 0; i < SensorCount; i++) {
+      //   Serial.print(sensorValues[i]);
+      //   Serial.print(" ");
+      // }
+      // Serial.println();
+      // Serial.print("Position: ");
+      // Serial.println(pos);
+      // Serial.print("Error: ");
+      // Serial.println(error);
 
       //right_speed = constrain(base_speed + motor_speed, -100, 100); // destroys differential if abs(base_speed + motor_speed) > 100
       //left_speed = constrain(base_speed - motor_speed, -100, 100); // destroys differential if abs(base_speed - motor_speed) > 100
@@ -232,17 +271,27 @@ void loop() {
       //   performLeftTurn();
       // }
 
+      if (digitalRead(pressure_button) == LOW) {
+        performPickup();
+
+        // Wait until button is released before allowing next trigger
+        while (digitalRead(pressure_button) == LOW) {
+          delay(10);
+        }
+        delay(200);  // Small debounce delay
+      }
+
       if (sensorValues[0] > 850 && sensorValues[1] > 850) {
         leftEdgeCount++;
-        Serial.print("Left detected: ");
-        Serial.println(leftEdgeCount);
+        // Serial.print("Left detected: ");
+        // Serial.println(leftEdgeCount);
       } else {
         leftEdgeCount = 0;
       }
       if (sensorValues[5] > 850 && sensorValues[4] > 850) {
         rightEdgeCount++;
-        Serial.print("Right detected: ");
-        Serial.println(rightEdgeCount);
+        // Serial.print("Right detected: ");
+        // Serial.println(rightEdgeCount);
       } else {
         rightEdgeCount = 0;
       }
@@ -286,24 +335,31 @@ double calculateLinePosition() {
   return (double)weighted_sum / total;  // Returns 0-3000, center is 1500
 }
 
-void performPickUp() {
-  // 1) Servo 1: +90°
-  servo1.write(servo_start1 + 50);
+void performPickup() {
+  // ---- 1) Servo 1: slow move +80° ----
+  int startPos = servo_start1;
+  int endPos = servo_start1 + 80;
+
+  for (int pos = startPos; pos <= endPos; pos++) {
+    servo1.write(pos);
+    delay(10);  // slow movement
+  }
+
   delay(2000);
 
-  // 2) Servo 2: +30°
+  // ---- 2) Servo 2: +30° ----
   servo2.write(servo_start2 + 30);
   delay(2000);
 
-  // 3) Servo 1: -90° (back to start)
+  // ---- 3) Servo 1: fast return ----
   servo1.write(servo_start1);
   delay(3000);
 
-  // 4) Servo 2: -60°
-  servo2.write(servo_start2 - 50);
+  // ---- 4) Servo 2: -80° ----
+  servo2.write(servo_start2 - 80);
   delay(2000);
 
-  // 5) Return both to original position
+  // ---- 5) Return both ----
   servo1.write(servo_start1);
   servo2.write(servo_start2);
   delay(2000);
@@ -343,6 +399,39 @@ void performPickUp() {
 //   delay(100);
 // }
 
+void turnAround() {
+  runMotors(0, 0);
+  delay(50);
+
+  runMotors(50, 50);
+  delay(200);
+
+  runMotors(turn_speed, -turn_speed);
+
+  unsigned long startTime = millis();
+
+  // Now keep turning until center sensors find the line again
+  bool lineFound = false;
+  int middleCount = 0;
+  startTime = millis();
+  while (!lineFound && (millis() - startTime < 6000)) {  // Timeout after 2 seconds
+    qtr.readCalibrated(sensorValues);
+
+    // Check if any of the center sensors see the line
+    if (sensorValues[2] > 800 || sensorValues[3] > 800) {
+      middleCount++;
+    }
+    if (middleCount >= 3) {
+      lineFound = true;
+    }
+    delay(25);
+  }
+
+  // Stop
+  runMotors(0, 0);
+  delay(50);
+}
+
 void performLeftTurn() {
   Serial.println("Turn left");
 
@@ -351,7 +440,7 @@ void performLeftTurn() {
   delay(50);
 
   runMotors(50, 50);
-  delay(100);
+  delay(200);
 
   // Start turning
   runMotors(turn_speed, -turn_speed);
@@ -359,23 +448,23 @@ void performLeftTurn() {
   // First, turn until we lose the line on the center sensors
   // (we need to clear the current line before looking for the new one)
   unsigned long startTime = millis();
-  // while (millis() - startTime < 400) {  // Turn for at least 300ms to clear current line
-  //   qtr.readCalibrated(sensorValues);
-  //   delay(25);
-  // }
+  while (millis() - startTime < 300) {  // Turn for at least 300ms to clear current line
+    qtr.readCalibrated(sensorValues);
+    delay(25);
+  }
 
   // Now keep turning until center sensors find the line again
   bool lineFound = false;
+  int middleCount = 0;
   startTime = millis();
   while (!lineFound && (millis() - startTime < 3000)) {  // Timeout after 2 seconds
     qtr.readCalibrated(sensorValues);
 
     // Check if any of the center sensors see the line
-    // if (sensorValues[2] > 800 || sensorValues[3] > 800) {
-    //   lineFound = true;
-    // }
-    int pos = calculateLinePosition();
-    if (pos - 1500 > -50 && pos - 1500 < 50) {
+    if (sensorValues[2] > 800 || sensorValues[3] > 800) {
+      middleCount++;
+    }
+    if (middleCount >= 3) {
       lineFound = true;
     }
     delay(25);
@@ -398,31 +487,35 @@ void performRightTurn() {
   delay(50);
 
   runMotors(50, 50);
-  delay(100);
+  delay(200);
 
   // Start turning
   runMotors(-turn_speed, turn_speed);
 
   // First, turn until we clear the current line
   unsigned long startTime = millis();
-  // while (millis() - startTime < 400) {
-  //   qtr.readCalibrated(sensorValues);
-  //   delay(25);
-  // }
+  while (millis() - startTime < 300) {
+    qtr.readCalibrated(sensorValues);
+    delay(25);
+  }
 
   // Now keep turning until center sensors find the line again
   bool lineFound = false;
+  int middleCount = 0;
   startTime = millis();
   while (!lineFound && (millis() - startTime < 3000)) {
     qtr.readCalibrated(sensorValues);
 
-    // if (sensorValues[2] > 800 || sensorValues[3] > 800) {
-    //   lineFound = true;
-    // }
-    int pos = calculateLinePosition();
-    if (pos - 1500 > -50 && pos - 1500 < 50) {
+    if (sensorValues[2] > 800 || sensorValues[3] > 800) {
+      middleCount++;
+    }
+    if (middleCount >= 3) {
       lineFound = true;
     }
+    // int pos = calculateLinePosition();
+    // if (pos - 1500 > -100 && pos - 1500 < 100) {
+    //   lineFound = true;
+    // }
     delay(25);
   }
 
