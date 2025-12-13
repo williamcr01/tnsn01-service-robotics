@@ -26,7 +26,7 @@ int motor1pin2 = 6;
 int left_speed = 0;
 int right_speed = 0;
 
-int base_speed = 65;
+int base_speed = 50;
 int turn_speed = 40;
 int turn_delay = 900;
 
@@ -52,19 +52,19 @@ uint16_t sensorValues[SensorCount];
 int turnThreshold = 1;
 int leftEdgeCount = 0;
 int rightEdgeCount = 0;
-int black_line = 500;
+int black_line = 650;
 
 //-------------------- Control settings --------------------
-double K_p = 0.1;
+double K_p = 0.08;
 double K_i = 0.0;
-double K_d = 0.005;
+double K_d = 0.015;
 double last_error = 0;
 double integrator = 0;
 double integrator_max = 1000;
 double error;
 
 unsigned long last_loop_time = 0;
-const unsigned long loop_interval = 25;
+const unsigned long loop_interval = 35;
 
 double T_s = loop_interval / 1000.0;  // 25 ms
 
@@ -147,8 +147,8 @@ int picked_up = 0;
 
 bool is_intersection = false;
 bool is_island = false;
-//char dirs[] = { 'S', 'S', 'R', 'L' };
-char dirs[] = { 'R', 'R', 'S', 'S', 'L', 'L' };
+char dirs[] = { 'L', 'S' };
+//char dirs[] = { 'R', 'R', 'S', 'S', 'L', 'L' };
 int curr_cmd = 0;
 
 void setup() {
@@ -186,7 +186,7 @@ void setup() {
     //if (button_state == LOW && last_button_state == HIGH) {
     if (button_state == LOW) {
       Serial.println("pressed");
-      start = true;
+      start = !start;
       Serial.print("start: ");
       Serial.println(start);
       delay(50);
@@ -310,6 +310,16 @@ void loop() {
       } else {
         rightEdgeCount = 0;
       }
+      uint16_t sensorSum = 0;
+      for (int i = 0; i < SensorCount; i++) {
+        sensorSum += sensorValues[i];
+      }
+
+      // If sum is very low, all sensors see white -> We are in an Island
+      // Threshold depends on calibration, usually < 200-400
+      if (sensorSum < 500) {
+        is_island = true;
+      }
 
       if (leftEdgeCount >= turnThreshold && rightEdgeCount >= turnThreshold) {
         // Intersection
@@ -325,9 +335,12 @@ void loop() {
         rightEdgeCount = 0;
       }
       if (is_intersection || is_island) {
-        Serial.println("Intersection");
+        Serial.println("Intersection/island");
         char cmd = dirs[curr_cmd];
-        if (is_island) { cmd = 'I'; }
+        if (is_island) {
+          cmd = 'I';
+          Serial.println("Island");
+        }
 
         switch (cmd) {
           case 'L':
@@ -346,10 +359,31 @@ void loop() {
             break;
           case 'I':
             // BLIND DRIVE for Island
-            runMotors(60, 60);
-            delay(600);  // Time it takes to cross the gap
+            Serial.println("Island command");
+            runMotors(0, 0);
+            delay(500);  // Time it takes to cross the gap
+            //delay(3000);
             // Then wait for line re-acquisition
-            //while (totalSensorSum < 200) { qtr.readCalibrated(sensorValues); }
+            qtr.readCalibrated(sensorValues);
+            uint16_t sensorSum = 0;
+            for (int i = 0; i < SensorCount; i++) {
+              sensorSum += sensorValues[i];
+            }
+
+            // If sum is very low, all sensors see white -> We are in an Island
+            // Threshold depends on calibration, usually < 200-400
+            bool flag = true;
+            while (flag) {
+              qtr.readCalibrated(sensorValues);
+              runMotorsSame(30);
+              //sensorSum = 0;
+              for (int i = 0; i < SensorCount; i++) {
+                //sensorSum += sensorValues[i];
+                if (sensorValues[i] > black_line) { flag = false; }
+              }
+              delay(loop_interval);
+            }
+            runMotors(0, 0);
             break;
         }
         curr_cmd++;
@@ -358,7 +392,7 @@ void loop() {
         // start = false;
       }
 
-      runMotors(left_speed, right_speed);
+      runMotorsNew(left_speed, right_speed);
 
       //delay(T_s * 1000); // not consistent, doesnt keep code execution time in mind
     }
@@ -739,6 +773,15 @@ void performRightTurnIntersect() {
 //   return aboveThreshold;
 // }
 
+void runMotorsSame(int speed) {
+  // If robot pulls LEFT, add negative trim (e.g., -5) to make left motor faster
+  // If robot pulls RIGHT, add positive trim (e.g., 5) to make left motor slower
+  int trim = -6;
+
+  // Apply trim to one motor to balance them
+  runMotorsNew(speed + trim, speed);
+}
+
 void runMotors(int leftSpeed, int rightSpeed) {  //Function to run the motors, the Speeds can be set between -100 and 100
   if (rightSpeed >= 0 and rightSpeed != 0) {
     int Speed = map(rightSpeed, 0, 100, 0, 255);
@@ -770,6 +813,36 @@ void runMotors(int leftSpeed, int rightSpeed) {  //Function to run the motors, t
   }
 }
 
+void runMotorsNew(int leftSpeed, int rightSpeed) {
+  int minPWM = 0; // Adjust this! Find the lowest value where motors still spin.
+
+  if (rightSpeed > 0) {
+    int Speed = map(rightSpeed, 0, 100, minPWM, 255);
+    analogWrite(motor1pin1, Speed);
+    digitalWrite(motor1pin2, LOW);
+  } else if (rightSpeed < 0) {
+    int Speed = map(abs(rightSpeed), 0, 100, minPWM, 255);
+    digitalWrite(motor1pin1, LOW);
+    analogWrite(motor1pin2, Speed);
+  } else {
+    digitalWrite(motor1pin1, LOW);
+    digitalWrite(motor1pin2, LOW);
+  }
+
+  if (leftSpeed > 0) {
+    int Speed = map(leftSpeed, 0, 100, minPWM, 255);
+    analogWrite(motor2pin1, Speed);
+    digitalWrite(motor2pin2, LOW);
+  } else if (leftSpeed < 0) {
+    int Speed = map(abs(leftSpeed), 0, 100, minPWM, 255);
+    digitalWrite(motor2pin1, LOW);
+    analogWrite(motor2pin2, Speed);
+  } else {
+    digitalWrite(motor2pin1, LOW);
+    digitalWrite(motor2pin2, LOW);
+  }
+}
+
 void calibrateSensors() {
   Serial.println("Calibrating... spinning over line");
   int delayTime = 20;
@@ -796,7 +869,13 @@ void calibrateSensors() {
 
   // Return to roughly center
   runMotors(-spinSpeed, spinSpeed);
-  for (int i = 0; i < 20; i++) {
+  bool centerFlag = false;
+  while(centerFlag == false) {
+    qtr.readCalibrated(sensorValues);
+    // Serial.println(sensorValues[2]);
+    if(sensorValues[2] > black_line && sensorValues[3] > black_line) {
+      centerFlag = true;
+    }
     qtr.calibrate();
     delay(delayTime);
   }
