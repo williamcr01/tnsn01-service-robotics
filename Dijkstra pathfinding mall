@@ -1,0 +1,316 @@
+// =====================
+// MAZE DATA STRUCTURES
+// =====================
+#define MAX_PATH 16
+#define INF 65535
+
+struct Coord {
+  uint8_t x;
+  uint8_t y;
+};
+
+struct Node {
+  Coord coord;
+  uint8_t degree;
+  Coord neighbors[4];        // W N E S
+  uint8_t corridorLength[4];
+};
+
+struct Path {
+  uint8_t nodes[MAX_PATH];   // indices of intersections
+  uint8_t length;
+  uint16_t totalDistance;
+};
+
+// =====================
+// INTERSECTION MAP
+// =====================
+
+static const Node INTERSECTIONS[] = {
+  {{0,1},2, {{255,255},{3,0},{255,255},{1,5}}, {255,6,255,5}},
+  {{1,5},4, {{0,1},{4,3},{2,5},{1,5}},         {6,7,1,4}},
+  {{2,5},3, {{1,5},{255,255},{3,4},{255,255}}, {1,255,2,255}},
+  {{3,0},3, {{0,1},{255,255},{3,0},{4,2}},     {6,255,2,5}},
+  {{3,4},3, {{3,4},{255,255},{4,4},{2,5}},     {2,255,1,2}},
+  {{4,2},3, {{3,0},{4,2},{255,255},{4,3}},     {3,10,255,1}},
+  {{4,3},3, {{1,5},{4,2},{255,255},{4,4}},     {7,1,255,1}},
+  {{4,4},3, {{3,4},{4,3},{4,4},{255,255}},     {1,1,24,255}}
+};
+
+static const int8_t startIntesectionIndex=2;
+Path p;
+Path q;
+
+// =====================
+// STATE VARIABLES
+// =====================
+bool first;
+int8_t picked_up = 0;
+int8_t direction; //West=0, North=1, East=2, South=3
+
+int8_t nextNodeIndex;
+int8_t preNodeIndex
+
+bool is_intersection = false;
+bool is_island = false;
+
+//int dirs[] = {1,3,2,0,0,2,1,3,0,2,3,4,0,2,3,7,2,4,0,1,3,3,8}; with U-turn as island
+int dirs[] = {1,3,0,0,1,3,0,3,4,0,3,7,4,0,1,3,3,8}; //WithoutU-turn as island
+int curr_cmd = 0;
+
+// ================
+
+
+
+void setup(){
+  
+}
+
+void loop(){
+
+  if(picked_up==3){//start return phase
+
+  
+  runMotorsNew(0,0);
+  
+  memset(dirs,8,sieof(dirs));
+  
+  if(nextNodeIndex==preNodeIndex){
+
+    turnAround();
+    dijkstra(preNodeIndex,startIntersectionIndex);
+    Path p=buildPath(preNodeIndex, startIntersectionIndex);
+    generateTurnArray(p,preNodeIndex,nextNodeIndex,dirs);
+    if(p.nodes[p.length-1]==1){
+      dirs[p.length]==1;
+    }
+    else{
+      dirs[p.length]==3;
+    }
+
+  }
+  else{
+    dijkstra(nextNodeIndex, startIntersectionIndex);
+    Path p=buildPath(nextNodeIndex, startIntersectionIndex);
+    dijkstra(preNodeIndex, startIntersectionIndex);
+    Path q=buildPath(preNodeIndex, startIntersectionIndex);
+
+    if(p.length<=q.length){
+      generateTurnArray(p,
+              INTERSECTIONS[preNodeIndex],
+              INTERSECTIONS[nextNodeIndex],
+              dirs);
+      
+      if(p.nodes[p.length-1]==1){
+        dirs[p.length]==1;
+      }
+      else{
+        dirs[p.length]==3;
+      }
+    }
+    else{
+      turnAround();
+      generateTurnArray(q,
+              INTERSECTIONS[nextNodeIndex],
+              INTERSECTIONS[preNodeIndex],
+              dirs);
+
+      if(q.nodes[q.length-1]==1){
+      dirs[q.length]==1;
+        }
+      else{
+      dirs[q.length]==3;
+        }
+    }
+
+
+  }
+  picked_up=0;
+  curr_cmd=0;
+  //first=false //maybe needed?
+}
+}
+
+    //which cardinal direction after intersection 
+    for (int i = 0; i < 4; i++) {
+    if (turn.neighbors[i].x == INTERSECTIONS[p.nodes[counter+1]].coord.x &&
+        turn.neighbors[i].y == INTERSECTIONS[p.nodes[counter+1]].coord.y) {
+        going = i;
+        break;
+      }
+    }
+
+    turnArray[counter] = (going - heading + 4) % 4;
+
+    if((turn.coord.x==0&&turn.coord.y==1)||(turn.coord.x==4&&turn.coord.y==2)){
+      turnArray[counter]+=4;
+    }
+
+    from=turn;
+    turn=INTERSECTIONS[p.nodes[counter+1]];
+
+    counter++;
+  }
+
+  }
+}
+
+//FOLLOWING PART IS ONLY USED FOR PATHFINDING WAY BACK TO START
+// =====================
+// GLOBAL ARRAYS
+// =====================
+
+uint16_t distArr[N_INTER];
+bool visited[N_INTER];
+int parent[N_INTER];
+
+// =====================
+// HELPERS
+// =====================
+
+int coordToIndex(uint8_t x, uint8_t y) {
+  for (int i = 0; i < N_INTER; i++) {
+    if (INTERSECTIONS[i].coord.x == x &&
+        INTERSECTIONS[i].coord.y == y)
+      return i;
+  }
+  return -1;
+}
+
+// =====================
+// DIJKSTRA
+// =====================
+
+void dijkstra(int start, int goal) {
+  for (int i = 0; i < N_INTER; i++) {
+    distArr[i] = INF;
+    visited[i] = false;
+    parent[i] = -1;
+  }
+
+  distArr[start] = 0;
+
+  for (;;) {
+    int best = -1;
+
+    for (int i = 0; i < N_INTER; i++) {
+      if (!visited[i] && (best == -1 || distArr[i] < distArr[best])) {
+        best = i;
+      }
+    }
+
+    if (best == -1 || best == goal) break;
+
+    visited[best] = true;
+    const Node cur = INTERSECTIONS[best];
+
+    for (int d = 0; d < 4; d++) {
+      if (cur.neighbors[d].x == 255) continue;
+
+      int nb = coordToIndex(cur.neighbors[d].x,
+                            cur.neighbors[d].y);
+      if (nb == -1) continue;
+
+      uint16_t cost = cur.corridorLength[d];
+      if (distArr[best] + cost < distArr[nb]) {
+        distArr[nb] = distArr[best] + cost;
+        parent[nb] = best;
+      }
+    }
+  }
+}
+
+// =====================
+// PATH BUILDER
+// =====================
+
+Path buildPath(int start, int goal) {
+  Path p;
+  p.length = 0;
+  p.totalDistance = distArr[goal];
+
+  int cur = goal;
+  while (cur != -1 && p.length < MAX_PATH) {
+    p.nodes[p.length++] = cur;
+    cur = parent[cur];
+  }
+
+  for (int i = 0; i < p.length / 2; i++) {
+    uint8_t tmp = p.nodes[i];
+    p.nodes[i] = p.nodes[p.length - 1 - i];
+    p.nodes[p.length - 1 - i] = tmp;
+  }
+
+  return p;
+}
+
+// =====================
+// PATH PRINTER
+// =====================
+
+void printPath(const Path p) {
+  Serial.print("Total distance: ");
+  Serial.println(p.totalDistance);
+
+  Serial.print("Path: ");
+  for (int i = 0; i < p.length; i++) {
+    Coord c = INTERSECTIONS[p.nodes[i]].coord;
+    Serial.print("(");
+    Serial.print(c.x);
+    Serial.print(",");
+    Serial.print(c.y);
+    Serial.print(")");
+    if (i < p.length - 1) Serial.print(" -> ");
+  }
+  Serial.println();
+}
+
+void generateTurnArray(const Path p, const Node start, const Node pre, int turnArray[]){
+
+
+  if(p.length<2){
+    return;
+  }
+
+  else{
+
+  Node from=pre;
+  Node turn=start;
+  int counter =0;
+  int heading=0;
+  int going=0;
+
+    while(counter<p.length-1){
+    
+    //which cardinal direction entering intersection from
+      for(int i=0; i<4; i++){
+        if(turn.neighbors[i].x==from.coord.x && turn.neighbors[i].y==from.coord.y){
+          heading=(i+2)%4;
+          break;
+      }
+    }
+
+
+    //which cardinal direction after intersection 
+    for (int i = 0; i < 4; i++) {
+    if (turn.neighbors[i].x == INTERSECTIONS[p.nodes[counter+1]].coord.x &&
+        turn.neighbors[i].y == INTERSECTIONS[p.nodes[counter+1]].coord.y) {
+        going = i;
+        break;
+      }
+    }
+
+    turnArray[counter] = (going - heading + 4) % 4;
+
+    if((turn.coord.x==0&&turn.coord.y==1)||(turn.coord.x==4&&turn.coord.y==2)){
+      turnArray[counter]+=4;
+    }
+
+    from=turn;
+    turn=INTERSECTIONS[p.nodes[counter+1]];
+
+    counter++;
+  }
+
+  }
+}
