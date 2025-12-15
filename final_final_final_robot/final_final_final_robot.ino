@@ -26,33 +26,9 @@ int motor1pin2 = 6;
 int left_speed = 0;
 int right_speed = 0;
 
-int base_speed = 50;
+int base_speed = 70;
 int turn_speed = 40;
 int turn_delay = 900;
-
-// Motor 1 (external interrupt on A)
-const uint8_t ENC1_A_PIN = 2;  // A (INT)
-const uint8_t ENC1_B_PIN = 9;  // B
-
-// Motor 2 (polled in loop, edge-detect on A)
-const uint8_t ENC2_A_PIN = 10;  // A (polled)
-const uint8_t ENC2_B_PIN = 4;   // B (polled)
-
-volatile long enc1_count = 0;  // signed counts Motor 1
-volatile long enc2_count = 0;  // signed counts Motor 2
-
-const unsigned long RPM_SAMPLE_MS = 30;  // sampling window for RPM
-const float PULSES_PER_REV = 20.0f;      // A-channel rising edges per shaft rev
-
-unsigned long lastSample = 0;
-long last_enc1 = 0;
-long last_enc2 = 0;
-
-float rpm1 = 0.0f;
-float rpm2 = 0.0f;
-
-// For Motor 2 polling (edge detect A)
-uint8_t enc2_a_prev = LOW;
 
 //-------------------- Servo Settings --------------------
 Servo servo1;
@@ -73,15 +49,15 @@ QTRSensors qtr;
 const uint8_t SensorCount = 6;
 uint16_t sensorValues[SensorCount];
 
-int turnThreshold = 1;
+int turnThreshold = 2;
 int leftEdgeCount = 0;
 int rightEdgeCount = 0;
 int black_line = 650;
 
 //-------------------- Control settings --------------------
-double K_p = 0.08;
+double K_p = 0.05;
 double K_i = 0.0;
-double K_d = 0.015;
+double K_d = 0.008;
 double last_error = 0;
 double integrator = 0;
 double integrator_max = 1000;
@@ -91,6 +67,27 @@ unsigned long last_loop_time = 0;
 const unsigned long loop_interval = 35;
 
 double T_s = loop_interval / 1000.0;  // 25 ms
+
+//-------------------- Encoder settings --------------------
+
+// Encoder pins
+const uint8_t ENC1_A_PIN = 2;  // Hardware interrupt capable
+const uint8_t ENC1_B_PIN = 9;
+const uint8_t ENC2_A_PIN = 10;  // Not interrupt capable on Leonardo
+const uint8_t ENC2_B_PIN = 4;
+
+// Encoder tick counts (volatile because modified in ISR)
+volatile long enc1_ticks = 0;
+volatile long enc2_ticks = 0;
+
+// For polling encoder 2
+uint8_t enc2_last_state = 0;
+
+// Island crossing PI controller
+double island_Kp = 0.085;  // Tune these
+double island_Ki = 0.05;
+double island_integrator = 0;
+double island_integrator_max = 70;
 
 //-------------------- Maze settings --------------------
 
@@ -171,13 +168,16 @@ int picked_up = 0;
 
 bool is_intersection = false;
 bool is_island = false;
-char dirs[] = { 'L', 'S' };
+char dirs[] = { 'R', 'R', 'L', 'S' };
 //char dirs[] = { 'R', 'R', 'S', 'S', 'L', 'L' };
 int curr_cmd = 0;
 
 void setup() {
   // Sonar
   // None needed
+
+  // Encoder
+  setupEncoders();
 
   //Serial
   Serial.begin(9600);
@@ -190,17 +190,6 @@ void setup() {
   pinMode(motor1pin2, OUTPUT);
   pinMode(motor2pin1, OUTPUT);
   pinMode(motor2pin2, OUTPUT);
-
-  // Encoder pins
-  pinMode(ENC1_A_PIN, INPUT_PULLUP);
-  pinMode(ENC1_B_PIN, INPUT_PULLUP);
-  pinMode(ENC2_A_PIN, INPUT_PULLUP);
-  pinMode(ENC2_B_PIN, INPUT_PULLUP);
-  // Motor 1: external interrupt on A rising edge
-  attachInterrupt(digitalPinToInterrupt(ENC1_A_PIN), enc1A_ISR, RISING);
-
-  // Init prev state for Motor 2 A
-  enc2_a_prev = digitalRead(ENC2_A_PIN);
 
   // Servo setup
   servo1.attach(SERVO1_PIN);
@@ -243,6 +232,7 @@ void loop() {
   if (start == true) {
     unsigned long now = millis();
     if ((now - last_loop_time >= loop_interval) || first == true) {  // keep loop timing consistent
+      pollEncoder2();
       first == false;
       last_loop_time = now;
       //Serial.println("In motor");
@@ -311,7 +301,7 @@ void loop() {
       //   performLeftTurn();
       // }
 
-      if (distance_cm < 15 && distance_cm != 0) {
+      if (distance_cm < 15 && distance_cm > 0) {
         //start = false;
         //turnAround();
         left_speed -= 30;
@@ -333,13 +323,13 @@ void loop() {
 
       qtr.readCalibrated(sensorValues);
 
-      if (sensorValues[0] > black_line) {
+      if (sensorValues[0] >= black_line) {
         leftEdgeCount++;
         Serial.println("Left edge");
       } else {
         leftEdgeCount = 0;
       }
-      if (sensorValues[5] > black_line) {
+      if (sensorValues[5] >= black_line) {
         rightEdgeCount++;
         Serial.println("Right edge");
       } else {
@@ -353,6 +343,8 @@ void loop() {
       // If sum is very low, all sensors see white -> We are in an Island
       // Threshold depends on calibration, usually < 200-400
       if (sensorSum < 500) {
+        runMotors(40, 40);
+        delay(25);
         is_island = true;
       }
 
@@ -392,102 +384,132 @@ void loop() {
             runMotors(base_speed - 20, base_speed - 20);
             delay(400);  // Clear the intersection lines
             break;
+          //case 'I':
+          // BLIND DRIVE for Island
+          // Serial.println("Island command");
+          // runMotors(0, 0);
+          // delay(500);  // Time it takes to cross the gap
+          // //delay(3000);
+          // // Then wait for line re-acquisition
+          // qtr.readCalibrated(sensorValues);
+          // uint16_t sensorSum = 0;
+          // for (int i = 0; i < SensorCount; i++) {
+          //   sensorSum += sensorValues[i];
+          // }
+
+          // // If sum is very low, all sensors see white -> We are in an Island
+          // // Threshold depends on calibration, usually < 200-400
+          // bool flag = true;
+          // while (flag) {
+          //   qtr.readCalibrated(sensorValues);
+          //   runMotorsSame(30);
+          //   //sensorSum = 0;
+          //   for (int i = 0; i < SensorCount; i++) {
+          //     //sensorSum += sensorValues[i];
+          //     if (sensorValues[i] > black_line) { flag = false; }
+          //   }
+          //   delay(loop_interval);
+          // }
+          // runMotors(0, 0);
+          // break;
           case 'I':
-            // BLIND DRIVE for Island
-            Serial.println("Island command");
+            Serial.println("Island - encoder closed-loop");
             runMotors(0, 0);
-            delay(500);  // Time it takes to cross the gap
-            //delay(3000);
-            // Then wait for line re-acquisition
-            qtr.readCalibrated(sensorValues);
-            uint16_t sensorSum = 0;
-            for (int i = 0; i < SensorCount; i++) {
-              sensorSum += sensorValues[i];
-            }
+            delay(250);
 
-            // If sum is very low, all sensors see white -> We are in an Island
-            // Threshold depends on calibration, usually < 200-400
-            bool flag = true;
-            int rpm_last_error = 0;
-            float K_p_rpm = 0.05;
-            float K_i_rpm = 0.01;
-            float K_d_rpm = 0.0;
-            float rpm_integrator = 0;
-            float rpm_integrator_max = 100.0;
+            // Reset encoder counts and integrator
+            noInterrupts();
+            enc1_ticks = 0;
+            enc2_ticks = 0;
+            interrupts();
+            island_integrator = 0;
 
-            // lastSample = millis();
-            // noInterrupts();
-            // last_enc1 = enc1_count;
-            // last_enc2 = enc2_count;
-            // interrupts();
-            while (flag) {
+            bool found_line = false;
+            unsigned long island_start = millis();
+            unsigned long max_island_time = 10000;
+            unsigned long last_control_time = millis();
+
+            int base_island_speed = 40;
+
+            double last_tick_error = 0;
+
+            while (!found_line && (millis() - island_start < max_island_time)) {
+              // Poll encoder 2 since it's not on interrupt
+              pollEncoder2();
+
               qtr.readCalibrated(sensorValues);
-              //runMotorsSame(30);
-              //sensorSum = 0;
-              for (int i = 2; i < SensorCount - 1; i++) {
-                //sensorSum += sensorValues[i];
-                if (sensorValues[i] > black_line) { flag = false; }
-              }
-              //delay(loop_interval);
-              // ---- Motor 2 encoder polling (edge-detect on A, read B for direction) ----
-              uint8_t a = digitalRead(ENC2_A_PIN);
-              if (enc2_a_prev == LOW && a == HIGH) {  // Rising edge on A
-                bool b = digitalRead(ENC2_B_PIN);
-                enc2_count += b ? -1 : +1;  // flip signs if reversed
-              }
-              enc2_a_prev = a;
 
-              // ---- Periodic RPM computation ----
-              unsigned long now = millis();
-              if (now - lastSample >= RPM_SAMPLE_MS) {
-                noInterrupts();
-                long c1 = enc1_count;
-                long c2 = enc2_count;
-                interrupts();
-
-                long d1 = c1 - last_enc1;
-                long d2 = c2 - last_enc2;
-
-                last_enc1 = c1;
-                last_enc2 = c2;
-                lastSample = now;
-
-                float window_sec = RPM_SAMPLE_MS / 1000.0f;
-                rpm1 = -(d1 / PULSES_PER_REV) * (60.0f / window_sec);
-                rpm2 = (d2 / PULSES_PER_REV) * (60.0f / window_sec);
-
-                int rpm_error = rpm1 - rpm2;
-                rpm_integrator += rpm_error * RPM_SAMPLE_MS;
-                rpm_integrator = constrain(integrator, -rpm_integrator_max, rpm_integrator_max);
-                double motor_speed = K_p_rpm * rpm_error + K_i_rpm * rpm_integrator + K_d_rpm * (rpm_error - rpm_last_error) / T_s;
-                rpm_last_error = rpm_error;
-
-                right_speed = 40 + motor_speed;
-                left_speed = 40 - motor_speed;
-
-                // Clamp to minimum of 0 (no reverse) and scale to preserve the differential
-                int min_speed = min(right_speed, left_speed);
-                if (min_speed < 0) {
-                  // Shift both up so the slower wheel is at 0
-                  right_speed -= min_speed;
-                  left_speed -= min_speed;
+              // Check if any sensor found the line
+              for (int i = 0; i < SensorCount; i++) {
+                if (sensorValues[i] > black_line) {
+                  found_line = true;
+                  break;
                 }
+              }
 
-                // Scale down if either exceeds 100
-                int max_speed = max(right_speed, left_speed);
-                if (max_speed > 100) {
-                  right_speed = right_speed * 100 / max_speed;
-                  left_speed = left_speed * 100 / max_speed;
+              if (!found_line) {
+                unsigned long now = millis();
+
+                // Run control loop at fixed interval
+                if (now - last_control_time >= 20) {
+                  last_control_time = now;
+
+                  // Read encoder counts atomically
+                  noInterrupts();
+                  long e1 = enc1_ticks;
+                  long e2 = enc2_ticks;
+                  interrupts();
+
+                  // Error = difference in wheel travel
+                  // Positive error means enc1 (right?) is ahead
+                  static double last_tick_error = 0;
+                  double tick_error = (double)(e1 - e2);
+                  double tick_error_delta = tick_error - last_tick_error;
+                  last_tick_error = tick_error;
+
+                  island_integrator += tick_error_delta;
+                  island_integrator = constrain(island_integrator, -island_integrator_max, island_integrator_max);
+
+                  double correction = island_Kp * tick_error_delta + island_Ki * island_integrator;
+
+                  // PI control
+                  //island_integrator += tick_error;
+                  //island_integrator = constrain(island_integrator, -island_integrator_max, island_integrator_max);
+
+                  //double correction = island_Kp * tick_error + island_Ki * island_integrator;
+                  //double correction = island_Kp * tick_error;
+
+                  // Apply correction: if right wheel ahead, slow it down
+                  int left_cmd = base_island_speed - (int)correction;
+                  int right_cmd = base_island_speed + (int)correction;
+
+                  // Clamp speeds
+                  left_cmd = constrain(left_cmd, 0, 60);
+                  right_cmd = constrain(right_cmd, 0, 60);
+
+                  runMotors(left_cmd, right_cmd);
+
+                  // Debug output
+                  Serial.print("E1:");
+                  Serial.print(e1);
+                  Serial.print(" E2:");
+                  Serial.print(e2);
+                  Serial.print(" Err:");
+                  Serial.print(tick_error_delta);
+                  Serial.print(" Cor:");
+                  Serial.println(correction);
                 }
-                Serial.print("motor 1: ");
-                Serial.print(rpm1, 1);
-                Serial.print(" rpm; motor 2: ");
-                Serial.print(rpm2, 1);
-                Serial.println(" rpm");
-                runMotorsNew(left_speed, right_speed);
               }
             }
+
             runMotors(0, 0);
+            delay(50);
+
+            if (!found_line) {
+              Serial.println("Warning: Island timeout!");
+            } else {
+              Serial.println("Line found!");
+            }
             break;
         }
         curr_cmd++;
@@ -498,16 +520,38 @@ void loop() {
 
       runMotorsNew(left_speed, right_speed);
 
-      delay(T_s * 1000); // not consistent, doesnt keep code execution time in mind
+      //delay(T_s * 1000); // not consistent, doesnt keep code execution time in mind
     }
   } else {
     runMotors(0, 0);
   }
 }
 
-void enc1A_ISR() {
-  bool b = digitalRead(ENC1_B_PIN);
-  enc1_count += b ? -1 : +1;
+void setupEncoders() {
+  pinMode(ENC1_A_PIN, INPUT_PULLUP);
+  pinMode(ENC1_B_PIN, INPUT_PULLUP);
+  pinMode(ENC2_A_PIN, INPUT_PULLUP);
+  pinMode(ENC2_B_PIN, INPUT_PULLUP);
+
+  // Attach interrupt for encoder 1 (pin 2 = interrupt 1 on Leonardo)
+  attachInterrupt(digitalPinToInterrupt(ENC1_A_PIN), enc1_isr, CHANGE);
+
+  // Store initial state for encoder 2 polling
+  enc2_last_state = digitalRead(ENC2_A_PIN);
+}
+
+void enc1_isr() {
+  // Simple counting - just increment (direction doesn't matter for speed matching)
+  enc1_ticks++;
+}
+
+void pollEncoder2() {
+  // Call this frequently in your loop
+  uint8_t state = digitalRead(ENC2_A_PIN);
+  if (state != enc2_last_state) {
+    enc2_ticks++;
+    enc2_last_state = state;
+  }
 }
 
 // Weights: sensor 1 = 0, sensor 2 = 1000, sensor 3 = 2000, sensor 4 = 3000
@@ -592,6 +636,7 @@ void performPickup() {
 // }
 
 void turnAround() {
+  Serial.println("Turn");
   runMotors(0, 0);
   delay(50);
 
@@ -634,7 +679,10 @@ void performLeftTurn() {
   runMotors(40, 40);
   delay(300);
   qtr.readCalibrated(sensorValues);
-  if (sensorValues[2] > black_line || sensorValues[3] > black_line) {
+  Serial.println(sensorValues[2]);
+  Serial.println(sensorValues[3]);
+  //Serial.println(sensorValues[0]);
+  if ((sensorValues[2] > black_line || sensorValues[3] > black_line)) {
     runMotors(0, 0);
     delay(400);
     is_intersection = true;
@@ -693,7 +741,10 @@ void performRightTurn() {
   runMotors(40, 40);
   delay(300);
   qtr.readCalibrated(sensorValues);
-  if (sensorValues[2] > black_line || sensorValues[3] > black_line) {
+  Serial.println(sensorValues[2]);
+  Serial.println(sensorValues[3]);
+  //Serial.println(sensorValues[5]);
+  if ((sensorValues[2] > black_line || sensorValues[3] > black_line)) {
     runMotors(0, 0);
     delay(400);
     is_intersection = true;
@@ -795,6 +846,8 @@ void performLeftTurnIntersect() {
 
   // Stop
   runMotors(0, 0);
+  leftEdgeCount = 0;
+  rightEdgeCount = 0;
   delay(50);
 
   if (!lineFound) {
@@ -855,6 +908,8 @@ void performRightTurnIntersect() {
 
   // Stop
   runMotors(0, 0);
+  leftEdgeCount = 0;
+  rightEdgeCount = 0;
   delay(50);
 
   if (!lineFound) {

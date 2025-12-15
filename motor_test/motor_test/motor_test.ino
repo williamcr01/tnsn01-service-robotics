@@ -1,10 +1,10 @@
 // Motor test code
 
 // ===== Motor pins =====
-int motor2pin1 = 10;  // PWM forward
+int motor2pin1 = 5;  // PWM forward
 int motor2pin2 = 11;  // PWM reverse
 
-int motor1pin1 = 9;   // PWM forward
+int motor1pin1 = 3;   // PWM forward
 int motor1pin2 = 6;   // PWM reverse
 
 // Set speed between -100 and 100
@@ -12,11 +12,11 @@ int motorSpeed = 50;  // change this value to set speed
 
 // ===== Encoder pins =====
 // Motor 1 (external interrupt on A)
-const uint8_t ENC1_A_PIN = 3;   // A (INT)
-const uint8_t ENC1_B_PIN = 2;   // B
+const uint8_t ENC1_A_PIN = 2;   // A (INT)
+const uint8_t ENC1_B_PIN = 9;   // B
 
 // Motor 2 (polled in loop, edge-detect on A)
-const uint8_t ENC2_A_PIN = 5;   // A (polled)
+const uint8_t ENC2_A_PIN = 10;   // A (polled)
 const uint8_t ENC2_B_PIN = 4;   // B (polled)
 
 // ===== Encoder/RPM state =====
@@ -89,7 +89,7 @@ void loop() {
     lastSample = now;
 
     float window_sec = RPM_SAMPLE_MS / 1000.0f;
-    rpm1 = (d1 / PULSES_PER_REV) * (60.0f / window_sec);
+    rpm1 = -(d1 / PULSES_PER_REV) * (60.0f / window_sec);
     rpm2 = (d2 / PULSES_PER_REV) * (60.0f / window_sec);
 
     // ---- Serial print ----
