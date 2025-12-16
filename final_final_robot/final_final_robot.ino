@@ -356,10 +356,14 @@ void loop() {
         is_island = true;
       }
 
-      if (leftEdgeCount >= turnThreshold && rightEdgeCount >= turnThreshold) {
+      qtr.readCalibrated(sensorValues);
+
+      if (sensorValues[0] >= black_line && sensorValues[5] >= black_line) {
         // Intersection
         //start = false;
         is_intersection = true;
+        rightEdgeCount = 0;
+        leftEdgeCount = 0;
       } else if (leftEdgeCount >= turnThreshold) {
         performLeftTurn();
         leftEdgeCount = 0;
