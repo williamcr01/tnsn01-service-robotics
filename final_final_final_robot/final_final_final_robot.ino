@@ -26,20 +26,21 @@ int motor1pin2 = 6;
 int left_speed = 0;
 int right_speed = 0;
 
-int base_speed = 70;
-int turn_speed = 40;
+int base_speed = 75;  // 75;
+int island_speed = 75;
+int turn_speed = 45;
 int turn_delay = 900;
 
 //-------------------- Servo Settings --------------------
 Servo servo1;
 Servo servo2;
 
-const int SERVO1_PIN = 7;
+const int SERVO1_PIN = 10;
 const int SERVO2_PIN = 8;
 
 // Set starting angles
 int servo_start1 = 45;
-int servo_start2 = 130;
+int servo_start2 = 110;
 
 int pressure_button = 12;
 
@@ -55,9 +56,9 @@ int rightEdgeCount = 0;
 int black_line = 650;
 
 //-------------------- Control settings --------------------
-double K_p = 0.05;
+double K_p = 0.075;
 double K_i = 0.0;
-double K_d = 0.008;
+double K_d = 0.01;
 double last_error = 0;
 double integrator = 0;
 double integrator_max = 1000;
@@ -73,7 +74,7 @@ double T_s = loop_interval / 1000.0;  // 25 ms
 // Encoder pins
 const uint8_t ENC1_A_PIN = 2;  // Hardware interrupt capable
 const uint8_t ENC1_B_PIN = 9;
-const uint8_t ENC2_A_PIN = 10;  // Not interrupt capable on Leonardo
+const uint8_t ENC2_A_PIN = 7;  // Not interrupt capable on Leonardo
 const uint8_t ENC2_B_PIN = 4;
 
 // Encoder tick counts (volatile because modified in ISR)
@@ -84,10 +85,11 @@ volatile long enc2_ticks = 0;
 uint8_t enc2_last_state = 0;
 
 // Island crossing PI controller
-double island_Kp = 0.15;  // Tune these
-double island_Ki = 0.01;
+double island_Kp = 1.2;
+double island_Ki = 0.1;
+//double island_Ki = 0.0;
 double island_integrator = 0;
-double island_integrator_max = 60;
+double island_integrator_max = 40;
 
 //-------------------- Maze settings --------------------
 
@@ -172,8 +174,8 @@ bool is_island = false;
 //char dirs[] = { 'I' };
 // 0 = S, 1 = R, 2 = U, 3 = L, 4 = I S, 5 = I R, 6 = I U, 7 = I L
 //int dirs[] = { 1, 1, 3, 0, 4, 2, 5 };
-int dirs[] = { 1, 3, 2, 0, 0, 2, 1, 3, 0, 2, 3, 4, 0, 2, 3, 7, 2, 4, 0, 1, 3, 3, 8 };
-//int dirs[] = {4};
+int dirs[] = { 1, 3, 2, 0, 0, 2, 1, 3, 0, 2, 3, 4, 0, 2, 3, 7, 2, 4, 0, 1, 3, 3, 8 };  // final
+//int dirs[] = { 7, 2, 4 };
 int curr_cmd = 0;
 
 void setup() {
@@ -236,13 +238,19 @@ void loop() {
   if (start == true) {
     unsigned long now = millis();
     if ((now - last_loop_time >= loop_interval) || first == true) {  // keep loop timing consistent
-      pollEncoder2();
+      //pollEncoder2();
       first == false;
       last_loop_time = now;
       //Serial.println("In motor");
       qtr.readCalibrated(sensorValues);
 
       uS = sonar.ping();
+
+      // servo2.write(servo_start2 - 20);
+      // delay(200);
+      // servo2.write(servo_start2 + 20);
+      // delay(200);
+      
 
       if (uS == 0) {
         Serial.println("Out of range");
@@ -308,8 +316,8 @@ void loop() {
       if (distance_cm < 15 && distance_cm > 0) {
         //start = false;
         //turnAround();
-        left_speed -= 30;
-        right_speed -= 30;
+        left_speed -= 45;
+        right_speed -= 45;
         // if (sensorValues[2] < black_line && sensorValues[3] < black_line){
         //   turnAround();
         // }
@@ -428,6 +436,22 @@ void loop() {
             Serial.println("Island - encoder closed-loop");
             // runMotors(0, 0);
             // delay(250);
+            // runMotorsNew(60, 60);
+            // qtr.readCalibrated(sensorValues);
+            // bool lineFound = false;
+            // while (!lineFound) {
+            //   // Check if any sensor found the line
+            //   for (int i = 0; i < SensorCount; i++) {
+            //     if (sensorValues[i] > black_line) {
+            //       lineFound = true;
+            //       break;
+            //     }
+            //     delay(25);
+            //   }
+            // }
+            // runMotors(0, 0);
+            // delay(25);
+
 
             runIsland();
             break;
@@ -436,13 +460,16 @@ void loop() {
             // runMotors(0, 0);
             // delay(250);
 
-            runMotorsNew(40, 40);
-            delay(200);
+            // runMotorsNew(45, 45);
+            // delay(250);
 
-            runMotors(-40, 40);
-            delay(500);
+            // runMotors(0, 0);
+            // delay(50);
 
-            runIsland();
+            runMotorsNew(-45, 45);
+            delay(160);
+
+            runIslandRight();
 
             break;
           case 7:  // island left
@@ -450,18 +477,21 @@ void loop() {
             // runMotors(0, 0);
             // delay(250);
 
-            runMotorsNew(40, 40);
-            delay(200);
+            // runMotorsNew(45, 45);
+            // delay(250);
 
-            runMotors(40, -40);
-            delay(500);
+            // runMotors(0, 0);
+            // delay(50);
 
-            runIsland();
+            runMotorsNew(45, -45);
+            delay(160);
+
+            runIslandLeft();
 
             break;
           case 8:
             start = false;
-          break;
+            break;
         }
         curr_cmd++;
         is_intersection = false;
@@ -491,13 +521,13 @@ void runIsland() {
   unsigned long max_island_time = 10000;
   unsigned long last_control_time = millis();
 
-  int base_island_speed = 50;
+  int base_island_speed = island_speed;
 
   double last_tick_error = 0;
 
   while (!found_line && (millis() - island_start < max_island_time)) {
     // Poll encoder 2 since it's not on interrupt
-    pollEncoder2();
+    //pollEncoder2();
 
     qtr.readCalibrated(sensorValues);
 
@@ -526,7 +556,7 @@ void runIsland() {
         // Positive error means enc1 (right?) is ahead
         static double last_tick_error = 0;
         double tick_error = (double)(e1 - e2);
-        double tick_error_delta = tick_error - last_tick_error;
+        double tick_error_delta = tick_error - last_tick_error - 5.0;
         last_tick_error = tick_error;
 
         island_integrator += abs(tick_error_delta);
@@ -542,12 +572,227 @@ void runIsland() {
         //double correction = island_Kp * tick_error;
 
         // Apply correction: if right wheel ahead, slow it down
-        int left_cmd = base_island_speed - (int)correction;
-        int right_cmd = base_island_speed + (int)correction;
+        int left_cmd = base_island_speed + (int)correction;
+        int right_cmd = base_island_speed - (int)correction;
 
         // Clamp speeds
-        left_cmd = constrain(left_cmd, 0, 60);
-        right_cmd = constrain(right_cmd, 0, 60);
+        left_cmd = constrain(left_cmd, 0, 100);
+        right_cmd = constrain(right_cmd, 0, 100);
+
+        runMotorsNew(left_cmd, right_cmd);
+
+        // Debug output
+        Serial.print("E1:");
+        Serial.print(e1);
+        Serial.print(" E2:");
+        Serial.print(e2);
+        Serial.print(" Err:");
+        Serial.print(tick_error_delta);
+        Serial.print(" Cor:");
+        Serial.print(correction);
+        Serial.print(" Right:");
+        Serial.print(right_cmd);
+        Serial.print(" Left:");
+        Serial.print(left_cmd);
+        Serial.print(" Integrator:");
+        Serial.println(island_integrator);
+      }
+    }
+  }
+
+  runMotors(0, 0);
+  delay(50);
+
+  if (!found_line) {
+    Serial.println("Warning: Island timeout!");
+  } else {
+    Serial.println("Line found!");
+  }
+}
+
+void runIslandLeft() {
+  // Reset encoder counts and integrator
+  noInterrupts();
+  enc1_ticks = 0;
+  enc2_ticks = 0;
+  interrupts();
+  island_integrator = 0;
+
+  bool found_line = false;
+  unsigned long island_start = millis();
+  unsigned long max_island_time = 10000;
+  unsigned long last_control_time = millis();
+
+  int base_island_speed = island_speed;
+
+  double last_tick_error = 0;
+
+  bool turn = false;
+
+  while (!found_line && (millis() - island_start < max_island_time)) {
+    // Poll encoder 2 since it's not on interrupt
+    //pollEncoder2();
+
+    qtr.readCalibrated(sensorValues);
+
+    if (distance_cm <= 12 && !turn) {
+      runMotors(0, 0);
+      delay(50);
+      runMotorsNew(turn_speed, -turn_speed);
+      delay(500);
+    }
+
+    // Check if any sensor found the line
+    for (int i = 0; i < SensorCount; i++) {
+      if (sensorValues[i] > black_line) {
+        found_line = true;
+        break;
+      }
+    }
+
+    if (!found_line) {
+      unsigned long now = millis();
+
+      // Run control loop at fixed interval
+      if (now - last_control_time >= 20) {
+        last_control_time = now;
+
+        // Read encoder counts atomically
+        noInterrupts();
+        long e1 = enc1_ticks;
+        long e2 = enc2_ticks;
+        interrupts();
+
+        // Error = difference in wheel travel
+        // Positive error means enc1 (right?) is ahead
+        static double last_tick_error = 0;
+        double tick_error = (double)(e1 - e2);
+        double tick_error_delta = tick_error - last_tick_error + 15.0;
+        last_tick_error = tick_error;
+
+        island_integrator += abs(tick_error_delta);
+        island_integrator = constrain(island_integrator, -island_integrator_max, island_integrator_max);
+
+        double correction = island_Kp * tick_error_delta + island_Ki * island_integrator;
+
+        // PI control
+        //island_integrator += tick_error;
+        //island_integrator = constrain(island_integrator, -island_integrator_max, island_integrator_max);
+
+        //double correction = island_Kp * tick_error + island_Ki * island_integrator;
+        //double correction = island_Kp * tick_error;
+
+        // Apply correction: if right wheel ahead, slow it down
+        int left_cmd = base_island_speed + (int)correction;
+        int right_cmd = base_island_speed - (int)correction;
+
+        // Clamp speeds
+        left_cmd = constrain(left_cmd, 0, 100);
+        right_cmd = constrain(right_cmd, 0, 100);
+
+        runMotorsNew(left_cmd, right_cmd);
+
+        // Debug output
+        Serial.print("E1:");
+        Serial.print(e1);
+        Serial.print(" E2:");
+        Serial.print(e2);
+        Serial.print(" Err:");
+        Serial.print(tick_error_delta);
+        Serial.print(" Cor:");
+        Serial.print(correction);
+        Serial.print(" Right:");
+        Serial.print(right_cmd);
+        Serial.print(" Left:");
+        Serial.print(left_cmd);
+        Serial.print(" Integrator:");
+        Serial.println(island_integrator);
+      }
+    }
+  }
+
+  runMotors(0, 0);
+  delay(50);
+
+  if (!found_line) {
+    Serial.println("Warning: Island timeout!");
+  } else {
+    Serial.println("Line found!");
+  }
+}
+
+void runIslandRight() {
+  // Reset encoder counts and integrator
+  noInterrupts();
+  enc1_ticks = 0;
+  enc2_ticks = 0;
+  interrupts();
+  island_integrator = 0;
+
+  bool found_line = false;
+  unsigned long island_start = millis();
+  unsigned long max_island_time = 10000;
+  unsigned long last_control_time = millis();
+
+  int base_island_speed = island_speed;
+
+  double last_tick_error = 0;
+
+  bool turn = false;
+
+  while (!found_line && (millis() - island_start < max_island_time)) {
+    // Poll encoder 2 since it's not on interrupt
+    //pollEncoder2();
+
+    qtr.readCalibrated(sensorValues);
+
+    // Check if any sensor found the line
+    for (int i = 0; i < SensorCount; i++) {
+      if (sensorValues[i] > black_line) {
+        found_line = true;
+        break;
+      }
+    }
+
+    if (!found_line) {
+      unsigned long now = millis();
+
+      // Run control loop at fixed interval
+      if (now - last_control_time >= 20) {
+        last_control_time = now;
+
+        // Read encoder counts atomically
+        noInterrupts();
+        long e1 = enc1_ticks;
+        long e2 = enc2_ticks;
+        interrupts();
+
+        // Error = difference in wheel travel
+        // Positive error means enc1 (right?) is ahead
+        static double last_tick_error = 0;
+        double tick_error = (double)(e1 - e2);
+        double tick_error_delta = tick_error - last_tick_error - 60.0;
+        last_tick_error = tick_error;
+
+        island_integrator += abs(tick_error_delta);
+        island_integrator = constrain(island_integrator, -island_integrator_max, island_integrator_max);
+
+        double correction = island_Kp * tick_error_delta + island_Ki * island_integrator;
+
+        // PI control
+        //island_integrator += tick_error;
+        //island_integrator = constrain(island_integrator, -island_integrator_max, island_integrator_max);
+
+        //double correction = island_Kp * tick_error + island_Ki * island_integrator;
+        //double correction = island_Kp * tick_error;
+
+        // Apply correction: if right wheel ahead, slow it down
+        int left_cmd = base_island_speed + (int)correction;
+        int right_cmd = base_island_speed - (int)correction;
+
+        // Clamp speeds
+        left_cmd = constrain(left_cmd, 0, 100);
+        right_cmd = constrain(right_cmd, 0, 100);
 
         runMotorsNew(left_cmd, right_cmd);
 
@@ -588,9 +833,10 @@ void setupEncoders() {
 
   // Attach interrupt for encoder 1 (pin 2 = interrupt 1 on Leonardo)
   attachInterrupt(digitalPinToInterrupt(ENC1_A_PIN), enc1_isr, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENC2_A_PIN), enc2_isr, CHANGE);
 
   // Store initial state for encoder 2 polling
-  enc2_last_state = digitalRead(ENC2_A_PIN);
+  //enc2_last_state = digitalRead(ENC2_A_PIN);
 }
 
 void enc1_isr() {
@@ -598,14 +844,19 @@ void enc1_isr() {
   enc1_ticks++;
 }
 
-void pollEncoder2() {
-  // Call this frequently in your loop
-  uint8_t state = digitalRead(ENC2_A_PIN);
-  if (state != enc2_last_state) {
-    enc2_ticks++;
-    enc2_last_state = state;
-  }
+void enc2_isr() {
+  // Simple counting just like Motor 1
+  enc2_ticks++;
 }
+
+// void pollEncoder2() {
+//   // Call this frequently in your loop
+//   uint8_t state = digitalRead(ENC2_A_PIN);
+//   if (state != enc2_last_state) {
+//     enc2_ticks++;
+//     enc2_last_state = state;
+//   }
+// }
 
 // Weights: sensor 1 = 0, sensor 2 = 1000, sensor 3 = 2000, sensor 4 = 3000
 double calculateLinePosition() {
